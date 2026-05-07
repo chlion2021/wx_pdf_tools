@@ -5,66 +5,48 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 强制使用 Node.js 24
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: macos-latest
     
     steps:
-      # 1. 拉取代码
       - name: 检出代码
         uses: actions/checkout@v4
       
-      # 2. 设置 Python 环境
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # wxPython 推荐用 3.11
+          python-version: '3.11'
       
-      # 3. 缓存 pip 依赖（加速后续构建）
       - name: 缓存 pip 包
-        uses: actions/cache@v4  # 升级到 v4
+        uses: actions/cache@v4
         with:
           path: ~/Library/Caches/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       
-      # 4. 安装依赖
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
           pip install wxPython PyPDF2
           pip install nuitka
-          pip install ordered-set  # Nuitka 可能需要
+          pip install ordered-set
       
-      # 5. 检查 about.png 是否存在（可选，用于调试）
       - name: 检查资源文件
         run: |
           if [ -f "about.png" ]; then
             echo "✅ about.png 存在"
             ls -lh about.png
           else
-            echo "⚠️ 警告: about.png 不存在，将创建占位图片"
-            # 创建一个简单的占位图片（可选）
-            # 使用 Python 生成一个简单的 PNG
-            python -c "
-import wx
-if not wx.App():
-    app = wx.App(False)
-# 创建占位图片
-img = wx.Image(800, 500)
-img.SetRGB(wx.Rect(0,0,800,500), 200, 200, 200)
-img.SaveFile('about.png', wx.BITMAP_TYPE_PNG)
-print('✅ 已创建占位图片 about.png')
-"
+            echo "⚠️ 警告: about.png 不存在"
           fi
       
-      # 6. 检查主程序文件
       - name: 检查 Python 文件
         run: |
           if [ -f "pdf_tool.py" ]; then
@@ -76,7 +58,6 @@ print('✅ 已创建占位图片 about.png')
             exit 1
           fi
       
-      # 7. 测试 Python 脚本能否运行
       - name: 测试 Python 脚本
         run: |
           python -c "import wx; print(f'wxPython version: {wx.__version__}')"
@@ -84,7 +65,6 @@ print('✅ 已创建占位图片 about.png')
           python -m py_compile pdf_tool.py
           echo "✅ Python 脚本语法正确"
       
-      # 8. 使用 Nuitka 打包（简化配置）
       - name: Nuitka 打包
         run: |
           python -m nuitka \
@@ -92,20 +72,26 @@ print('✅ 已创建占位图片 about.png')
             --onefile \
             --enable-plugin=wxpython \
             --follow-imports \
-            --include-data-files=about.png=about.png \
             --macos-create-app-bundle \
-            --macos-app-icon=about.png \
             --output-dir=build \
             --remove-output \
             --assume-yes-for-downloads \
             pdf_tool.py
         continue-on-error: false
       
-      # 9. 查找生成的文件
-      - name: 查找生成的可执行文件
+      - name: 处理 about.png 资源
+        run: |
+          # 如果有 about.png，复制到构建目录
+          if [ -f "about.png" ]; then
+            if [ -d "build/pdf_tool.dist" ]; then
+              cp about.png build/pdf_tool.dist/
+            fi
+            echo "✅ 已处理 about.png"
+          fi
+      
+      - name: 查找生成的文件
         run: |
           echo "查找生成的文件..."
-          find build -type f -name "pdf_tool" -o -name "pdf_tool.app" -o -name "*.app" | head -20
           echo "build 目录内容:"
           ls -la build/
           if [ -d "build/pdf_tool.dist" ]; then
@@ -113,10 +99,8 @@ print('✅ 已创建占位图片 about.png')
             ls -la build/pdf_tool.dist/
           fi
       
-      # 10. 重命名产物（方便识别）
-      - name: 重命名可执行文件
+      - name: 重命名产物
         run: |
-          # 查找 .app bundle
           if [ -d "build/pdf_tool.app" ]; then
             mv build/pdf_tool.app build/PDF合并分割工具.app
             echo "✅ 找到并重命名 .app bundle"
@@ -131,11 +115,9 @@ print('✅ 已创建占位图片 about.png')
             echo "✅ 找到并重命名可执行文件"
           else
             echo "⚠️ 警告: 未找到生成的可执行文件"
-            find . -name "pdf_tool" -o -name "*.app" | head -10
           fi
         continue-on-error: true
       
-      # 11. 创建 ZIP 压缩包
       - name: 创建 ZIP 压缩包
         run: |
           if [ -d "build/PDF合并分割工具.app" ]; then
@@ -143,47 +125,36 @@ print('✅ 已创建占位图片 about.png')
             cd build
             zip -r ../PDF合并分割工具-macOS.zip "PDF合并分割工具.app"
             cd ..
-            echo "✅ 已创建 ZIP 包: PDF合并分割工具-macOS.zip"
+            echo "✅ 已创建 ZIP 包"
           elif [ -f "build/PDF合并分割工具" ]; then
             echo "正在打包可执行文件..."
             cd build
             zip -r ../PDF合并分割工具-macOS.zip "PDF合并分割工具"
             cd ..
-            echo "✅ 已创建 ZIP 包: PDF合并分割工具-macOS.zip"
+            echo "✅ 已创建 ZIP 包"
           else
             echo "⚠️ 未找到可打包的文件"
-            # 打包整个 build 目录作为后备
             zip -r PDF合并分割工具-macOS.zip build/
           fi
         continue-on-error: true
       
-      # 12. 清理临时文件
       - name: 清理临时文件
         run: |
           echo "开始清理临时文件..."
-          
-          # 删除 Nuitka 编译缓存
           rm -rf pdf_tool.build
           rm -rf pdf_tool.dist
           rm -rf pdf_tool.onefile-build
           rm -rf __pycache__
           rm -rf *.pyc
           rm -rf *.pyo
-          
-          # 删除打包过程中可能产生的临时目录
           rm -rf build/*.build
           rm -rf build/*.dist
-          rm -rf build/__pycache__
-          find build -name "*.pyc" -delete 2>/dev/null || true
-          find build -name "__pycache__" -type d -delete 2>/dev/null || true
-          
-          # 删除编译日志
+          find . -name "*.pyc" -delete 2>/dev/null || true
+          find . -name "__pycache__" -type d -delete 2>/dev/null || true
           rm -f compile.log
           rm -f nuitka-log.txt
-          
           echo "✅ 清理完成"
       
-      # 13. 最终检查并上传产物
       - name: 检查最终产物
         run: |
           echo "最终产物检查:"
@@ -198,11 +169,9 @@ print('✅ 已创建占位图片 about.png')
             ls -lh build/PDF合并分割工具
           else
             echo "❌ 未找到任何产物"
-            echo "完整目录结构:"
             ls -laR build/
           fi
       
-      # 14. 上传打包产物
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
@@ -211,14 +180,9 @@ print('✅ 已创建占位图片 about.png')
             PDF合并分割工具-macOS.zip
             build/PDF合并分割工具.app
             build/PDF合并分割工具
-            !build/*.build
-            !build/*.dist
-            !**/__pycache__
-            !**/*.pyc
           if-no-files-found: warn
           compression-level: 9
       
-      # 15. 最终清理（确保工作空间干净）
       - name: 最终清理
         if: always()
         run: |
@@ -230,5 +194,4 @@ print('✅ 已创建占位图片 about.png')
           rm -rf build/*.build
           rm -rf build/*.dist
           rm -f compile.log
-          df -h .
           echo "✅ 最终清理完成"
