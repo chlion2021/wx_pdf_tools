@@ -1,212 +1,30 @@
-name: macOS PDF合并分割工具打包
-
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-env:
-  # 强制使用 Python 3.11 的环境
-  MACOSX_DEPLOYMENT_TARGET: "11.0"
-
-jobs:
-  build:
-    runs-on: macos-latest
+# 替换原来的 Nuitka 打包步骤为：
+- name: Nuitka 打包（详细调试）
+  run: |
+    # 先安装编译工具
+    brew install gcc
     
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-      
-      - name: 设置 Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: 缓存 pip 包
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      
-      - name: 安装系统依赖
-        run: |
-          # 安装 wxPython 需要的系统库
-          brew install pkg-config
-          brew install libjpeg
-          brew install libpng
-          brew install libtiff
-          brew install libx11
-      
-      - name: 安装 Python 依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install wheel
-          # wxPython 安装需要较长时间，添加详细输出
-          pip install wxPython PyPDF2 --verbose
-          pip install nuitka ordered-set
-          pip install pyinstaller  # 备用打包方案
-      
-      - name: 验证文件存在
-        run: |
-          echo "检查项目文件..."
-          if [ ! -f "pdf_tool.py" ]; then
-            echo "❌ 错误: 找不到 pdf_tool.py"
-            echo "当前目录内容:"
-            ls -la
-            exit 1
-          fi
-          
-          if [ -f "about.png" ]; then
-            echo "✅ about.png 存在"
-            ls -lh about.png
-          else
-            echo "⚠️ 警告: about.png 不存在（这可能导致运行时报错）"
-          fi
-          
-          echo "✅ 文件检查完成"
-      
-      - name: 测试 Python 环境
-        run: |
-          python --version
-          pip list | grep -E "wxPython|PyPDF2|nuitka"
-          python -c "import wx; print(f'wxPython: {wx.__version__}')" || echo "wxPython 导入测试失败"
-          python -c "import PyPDF2; print(f'PyPDF2: {PyPDF2.__version__}')" || echo "PyPDF2 导入测试失败"
-          python -m py_compile pdf_tool.py && echo "✅ 语法检查通过"
-      
-      - name: Nuitka 打包为 macOS 应用
-        run: |
-          # 创建干净的构建目录
-          rm -rf build pdf_tool.build pdf_tool.dist pdf_tool.onefile-build
-          
-          # 使用 Nuitka 打包（详细模式）
-          python -m nuitka \
-            --standalone \
-            --macos-create-app-bundle \
-            --enable-plugin=wxpython \
-            --follow-imports \
-            --include-data-file=about.png=about.png \
-            --output-dir=build \
-            --remove-output \
-            --assume-yes-for-downloads \
-            --show-progress \
-            --verbose \
-            pdf_tool.py
-          
-          echo "Nuitka 打包完成，检查生成的文件..."
-      
-      - name: 调试 - 查看构建产物结构
-        run: |
-          echo "=== build 目录结构 ==="
-          find build -type f -name "*.app" -o -name "pdf_tool*" -o -name "*.dmg" | head -20
-          echo ""
-          echo "=== build 目录完整列表 ==="
-          ls -laR build/ | head -50
-          echo ""
-          echo "=== 查找 .app 包 ==="
-          find . -name "*.app" -type d
-      
-      - name: 定位并重命名 .app 包
-        run: |
-          # 尝试多个可能的 .app 包位置
-          APP_PATH=""
-          
-          if [ -d "build/pdf_tool.app" ]; then
-            APP_PATH="build/pdf_tool.app"
-          elif [ -d "build/pdf_tool.dist/pdf_tool.app" ]; then
-            APP_PATH="build/pdf_tool.dist/pdf_tool.app"
-          elif [ -d "pdf_tool.dist/pdf_tool.app" ]; then
-            APP_PATH="pdf_tool.dist/pdf_tool.app"
-          elif [ -d "pdf_tool.app" ]; then
-            APP_PATH="pdf_tool.app"
-          fi
-          
-          if [ -n "$APP_PATH" ]; then
-            echo "✅ 找到 .app 包: $APP_PATH"
-            # 复制 .app 包到 build 目录
-            cp -r "$APP_PATH" "build/PDF合并分割工具.app"
-            echo "✅ 已重命名为 build/PDF合并分割工具.app"
-            echo "APP_CREATED=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ 未找到 .app 包，检查是否只生成了可执行文件"
-            # 查找可执行文件
-            if [ -f "build/pdf_tool" ]; then
-              echo "✅ 找到可执行文件: build/pdf_tool"
-              echo "APP_CREATED=false" >> $GITHUB_ENV
-            elif [ -f "pdf_tool.dist/pdf_tool" ]; then
-              echo "✅ 找到可执行文件: pdf_tool.dist/pdf_tool"
-              cp "pdf_tool.dist/pdf_tool" "build/PDF合并分割工具"
-              echo "APP_CREATED=false" >> $GITHUB_ENV
-            else
-              echo "❌ 未找到任何可执行文件或 .app 包"
-              echo "APP_CREATED=false" >> $GITHUB_ENV
-              exit 1
-            fi
-          fi
-      
-      - name: 复制资源文件到 .app 内
-        if: env.APP_CREATED == 'true'
-        run: |
-          if [ -f "about.png" ]; then
-            # 找到 .app 内的 Resources 目录
-            APP_BUNDLE="build/PDF合并分割工具.app"
-            if [ -d "$APP_BUNDLE/Contents/Resources" ]; then
-              cp about.png "$APP_BUNDLE/Contents/Resources/"
-              echo "✅ 已复制 about.png 到 Resources"
-            else
-              cp about.png "$APP_BUNDLE/Contents/MacOS/"
-              echo "✅ 已复制 about.png 到 MacOS"
-            fi
-          fi
-      
-      - name: 创建 ZIP 压缩包
-        run: |
-          cd build
-          if [ -d "PDF合并分割工具.app" ]; then
-            echo "正在打包 .app 文件..."
-            zip -r "../PDF合并分割工具-macOS.zip" "PDF合并分割工具.app"
-            echo "✅ ZIP 包创建成功"
-          elif [ -f "PDF合并分割工具" ]; then
-            echo "正在打包可执行文件..."
-            zip -r "../PDF合并分割工具-macOS.zip" "PDF合并分割工具"
-            echo "✅ ZIP 包创建成功"
-          else
-            echo "⚠️ 未找到可打包的文件，尝试备份方案"
-            cd ..
-            zip -r "PDF合并分割工具-macOS.zip" build/
-          fi
-          cd ..
-          ls -lh PDF合并分割工具-macOS.zip
-      
-      - name: 验证最终产物
-        run: |
-          echo "=== 最终产物验证 ==="
-          if [ -f "PDF合并分割工具-macOS.zip" ]; then
-            ZIP_SIZE=$(ls -lh PDF合并分割工具-macOS.zip | awk '{print $5}')
-            echo "✅ ZIP 包存在，大小: $ZIP_SIZE"
-          else
-            echo "❌ ZIP 包不存在"
-          fi
-          
-          if [ -d "build/PDF合并分割工具.app" ]; then
-            echo "✅ .app 包存在"
-            ls -ld build/PDF合并分割工具.app
-          fi
-          
-          # 显示最终 build 目录内容
-          echo "=== build 目录最终内容 ==="
-          ls -la build/
-      
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: PDF合并分割工具-macOS
-          path: |
-            PDF合并分割工具-macOS.zip
-            build/PDF合并分割工具.app
-            build/PDF合并分割工具
-          if-no-files-found: warn
-          compression-level: 0  # 改为 0 加速上传，因为已经是 zip
+    # 清理之前的构建
+    rm -rf build pdf_tool.build pdf_tool.dist
+    
+    # 详细模式打包，捕获所有输出
+    python -m nuitka \
+      --standalone \
+      --macos-create-app-bundle \
+      --enable-plugin=wxpython \
+      --follow-imports \
+      --include-data-file=about.png=about.png \
+      --output-dir=build \
+      --remove-output \
+      --assume-yes-for-downloads \
+      --show-progress \
+      --verbose \
+      --report=build-report.xml \
+      pdf_tool.py 2>&1 | tee nuitka-build.log
+    
+    # 检查构建日志中的错误
+    if grep -i "error" nuitka-build.log; then
+      echo "发现错误，请检查日志"
+      cat nuitka-build.log
+      exit 1
+    fi
